@@ -13,6 +13,7 @@ import { Task } from './task.entity'; // Import Task entity
   ],
   controllers: [TasksController],
   providers: [TasksService],
+  exports: [TasksService],
   // No exports needed typically unless another module depends on TasksService
 })
 export class TasksModule {}

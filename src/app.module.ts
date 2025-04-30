@@ -1,71 +1,75 @@
-// src/app.module.ts (BENAR - Gaya Referensi dengan Global Guard)
+// src/app.module.ts (Lengkap dan Diperbaiki)
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AuthModule } from './auth/auth.module'; // Pastikan AuthModule diimpor
+import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/user.module';
 import { TasksModule } from './tasks/task.module';
+import { CategoriesModule } from './categories/categories.module';
+import { NotesModule } from './notes/notes.module'; // <-- Impor NotesModule
 import { DataSourceOptions } from 'typeorm';
-import { User } from './users/user.entity'; // Impor entity
-import { Task } from './tasks/task.entity'; // Impor entity
-import { APP_GUARD } from '@nestjs/core'; // <-- Impor APP_GUARD
-import { AuthGuard } from './auth/auth.guard'; // <-- Impor AuthGuard kustom
+import { User } from './users/user.entity';
+import { Task } from './tasks/task.entity';
+import { Category } from './categories/category.entity';
+import { Note } from './notes/note.entity'; // <-- Impor Note entity
+import { APP_GUARD } from '@nestjs/core';
+import { AuthGuard } from './auth/auth.guard';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: '.env',
-    }),
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      // useFactory HARUS berisi logika untuk membaca .env dan mengembalikan DataSourceOptions
       useFactory: (configService: ConfigService): DataSourceOptions => {
+        // --- Pastikan semua definisi variabel ada di sini ---
         const isProduction =
-          configService.get<string>('NODE_ENV') === 'production';
+          configService.get<string>('NODE_ENV') === 'production'; // Definisi isProduction
         const host = configService.get<string>('POSTGRES_HOST');
         const port = configService.get<number>('POSTGRES_PORT');
         const username = configService.get<string>('POSTGRES_USER');
         const password = configService.get<string>('POSTGRES_PASSWORD');
-        const database = configService.get<string>('POSTGRES_DATABASE');
+        const database = configService.get<string>('POSTGRES_DATABASE'); // Definisi database
+        // --- Akhir definisi variabel ---
 
+        // Pengecekan variabel tetap ada
         if (!host || !port || !username || !password || !database) {
           throw new Error(
             'FATAL ERROR: Missing Database Environment Variables in AppModule configuration.',
           );
         }
 
-        // Kembalikan konfigurasi koneksi database yang valid
+        // Objek DataSourceOptions yang dikembalikan
         return {
           type: 'postgres',
           host: host,
           port: port,
           username: username,
           password: password,
-          database: database,
-          // Tetap gunakan entities eksplisit karena ini yang berhasil untuk Anda sebelumnya
-          entities: [User, Task],
-          synchronize: false,
-          logging: !isProduction,
-          ssl: { rejectUnauthorized: false },
+          database: database, // Gunakan variabel database
+          entities: [User, Task, Category, Note], // Daftarkan semua entity
+          synchronize: false, // Gunakan migrasi
+          logging: !isProduction, // Gunakan variabel isProduction
+          ssl: { rejectUnauthorized: false }, // Konfigurasi SSL
         };
       },
-      // TIDAK pakai autoLoadEntities jika pakai 'entities' di factory
+      // autoLoadEntities tidak dipakai karena entities didaftarkan di factory
     }),
-    AuthModule, // AuthModule tetap dibutuhkan untuk JwtService dll.
+    // Impor semua modul fitur
+    AuthModule,
     UsersModule,
     TasksModule,
+    CategoriesModule,
+    NotesModule,
   ],
-  controllers: [], // Hapus AppController jika tidak dipakai
+  controllers: [], // Tidak ada AppController
   providers: [
     // Daftarkan AuthGuard sebagai global guard
     {
       provide: APP_GUARD,
-      useClass: AuthGuard, // Gunakan AuthGuard kustom Anda
+      useClass: AuthGuard,
     },
-    // AppService tidak perlu jika AppController dihapus
-    // JwtService & ConfigService disediakan oleh AuthModule & ConfigModule global
+    // Tidak ada AppService
   ],
 })
 export class AppModule {}

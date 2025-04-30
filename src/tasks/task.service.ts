@@ -1,7 +1,7 @@
+// src/tasks/task.service.ts (Lengkap dengan Relasi Category di findAll)
 import {
   Injectable,
   NotFoundException,
-  ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,19 +17,20 @@ export class TasksService {
     private taskRepository: Repository<Task>,
   ) {}
 
+  /**
+   * Membuat task baru untuk user tertentu.
+   */
   async createTask(
     createTaskDto: CreateTaskDto,
     userId: number,
   ): Promise<Task> {
-    const { title, description, deadline, status } = createTaskDto;
+    const { title, description, deadline, status, categoryId } = createTaskDto;
 
-    // Convert deadline string to Date object safely
     let deadlineDate: Date;
     try {
       deadlineDate = new Date(deadline);
       if (isNaN(deadlineDate.getTime())) {
-        // Check if the conversion resulted in a valid date
-        throw new Error(); // Trigger catch block if invalid
+        throw new Error();
       }
     } catch (error) {
       throw new BadRequestException(
@@ -40,148 +41,162 @@ export class TasksService {
     const task = this.taskRepository.create({
       title,
       description,
-      deadline: deadlineDate, // Use the converted Date object
-      status: status || TaskStatus.ToDo, // Default if not provided
-      userId: userId, // Associate with the logged-in user
+      deadline: deadlineDate,
+      status: status || TaskStatus.ToDo,
+      userId: userId,
+      categoryId: categoryId, // <-- Pastikan ini sudah ada
     });
 
     return this.taskRepository.save(task);
   }
 
+  /**
+   * Mencari semua task milik user tertentu, dengan opsi filter dan sort.
+   * Sekarang menyertakan data kategori terkait.
+   */
   async findAll(
     userId: number,
     status?: TaskStatus,
     search?: string,
     sortBy: 'createdAt' | 'deadline' = 'createdAt',
-    sortOrder: 'ASC' | 'DESC' = 'DESC', // TypeORM uses 'ASC'/'DESC'
+    sortOrder: 'ASC' | 'DESC' = 'DESC',
   ): Promise<Task[]> {
+    // Buat objek opsi query TypeORM
     const queryOptions: FindManyOptions<Task> = {
-      where: { userId: userId }, // Base filter by user
-      order: { [sortBy]: sortOrder },
+      where: { userId: userId }, // Selalu filter berdasarkan userId
+      order: { [sortBy]: sortOrder }, // Terapkan sorting
+      // --- PASTIKAN RELASI DIAKTIFKAN ---
+      relations: ['category'], // <-- Muat data dari tabel 'categories' yang berelasi
+      // --- AKHIR PERUBAHAN PENTING ---
     };
 
-    // Add status filter if provided
+    // Logika filter status dan search tetap sama, TAPI perlu disesuaikan
+    // agar bekerja dengan benar saat 'where' menjadi array karena search
+
+    let baseWhere: any = { userId: userId }; // Mulai dengan filter user
     if (status) {
-      queryOptions.where = { ...queryOptions.where, status: status };
+      baseWhere.status = status; // Tambahkan status jika ada
     }
 
-    // Add search filter if provided
     if (search) {
-      const searchPattern = ILike(`%${search}%`); // Case-insensitive search
-      // If status is also present, combine with AND within OR blocks
-      if (status) {
-        queryOptions.where = [
-          { userId: userId, status: status, title: searchPattern },
-          { userId: userId, status: status, description: searchPattern },
-        ];
-      } else {
-        // If only search is present
-        queryOptions.where = [
-          { userId: userId, title: searchPattern },
-          { userId: userId, description: searchPattern },
-        ];
-      }
+      const searchPattern = ILike(`%${search}%`);
+      // Buat array kondisi OR, pastikan baseWhere (userId dan status jika ada) ada di kedua kondisi
+      queryOptions.where = [
+        { ...baseWhere, title: searchPattern },
+        { ...baseWhere, description: searchPattern },
+      ];
+    } else {
+      // Jika tidak ada search, where cukup objek tunggal baseWhere
+      queryOptions.where = baseWhere;
     }
 
+    // Jalankan query find
     return this.taskRepository.find(queryOptions);
   }
 
+  /**
+   * Mencari satu task spesifik berdasarkan ID dan memastikan kepemilikan user.
+   */
   async findOne(id: number, userId: number): Promise<Task> {
-    const task = await this.taskRepository.findOneBy({
-      id: id,
-      userId: userId,
+    // Saat mengambil satu task, juga muat relasi kategorinya jika perlu ditampilkan di detail
+    const task = await this.taskRepository.findOne({
+      where: { id: id, userId: userId },
+      relations: ['category'], // <-- Muat juga relasi category di sini
     });
 
     if (!task) {
-      // Throw NotFound whether task doesn't exist or belongs to another user
       throw new NotFoundException(`Task with ID ${id} not found.`);
     }
     return task;
   }
 
+  /**
+   * Mengupdate task yang sudah ada.
+   */
   async updateTask(
     id: number,
     updateTaskDto: UpdateTaskDto,
     userId: number,
   ): Promise<Task> {
-    // Use the findOne method which includes the ownership check
+    // findOne sudah mengambil task beserta relasi category jika ada
     const task = await this.findOne(id, userId);
 
-    // Apply updates directly to the fetched 'task' entity instance
-    // Check if the property exists (is not undefined) in the DTO before updating
-    if (updateTaskDto.title !== undefined) {
-      task.title = updateTaskDto.title;
-    }
-    // Allow setting description to null or string if provided in DTO
-    if (updateTaskDto.description !== undefined) {
+    // Terapkan perubahan dari DTO
+    if (updateTaskDto.title !== undefined) task.title = updateTaskDto.title;
+    if (updateTaskDto.description !== undefined)
       task.description = updateTaskDto.description;
-    }
-    if (updateTaskDto.status !== undefined) {
-      task.status = updateTaskDto.status;
-    }
-    // Handle deadline conversion safely
+    if (updateTaskDto.status !== undefined) task.status = updateTaskDto.status;
     if (updateTaskDto.deadline !== undefined) {
       try {
         const deadlineDate = new Date(updateTaskDto.deadline);
-        // Check if the conversion resulted in a valid date
-        if (isNaN(deadlineDate.getTime())) {
-          throw new Error('Invalid date format produced NaN');
-        }
-        task.deadline = deadlineDate; // Assign the converted Date object
+        if (isNaN(deadlineDate.getTime()))
+          throw new Error('Invalid date format');
+        task.deadline = deadlineDate;
       } catch (error) {
-        // Catch errors from new Date() or the isNaN check
-        throw new BadRequestException(
-          'Invalid deadline date format. Please use ISO 8601 format.',
-        );
+        throw new BadRequestException('Invalid deadline date format.');
       }
     }
+    // Update categoryId jika ada di DTO (termasuk jika nilainya null)
+    if (updateTaskDto.categoryId !== undefined) {
+      task.categoryId = updateTaskDto.categoryId;
+    }
 
-    // Now save the modified 'task' entity
-    // TypeORM's save method handles updates if the entity has an ID
+    // Simpan perubahan
     try {
-      return await this.taskRepository.save(task);
+      // Simpan entity yang sudah diubah
+      const updatedTask = await this.taskRepository.save(task);
+      // Muat ulang relasi category secara eksplisit jika save tidak mengembalikannya
+      // (tergantung versi TypeORM, kadang perlu)
+      if (!updatedTask.category && updatedTask.categoryId) {
+        const reloadedTask = await this.findOne(updatedTask.id, userId); // Panggil findOne lagi
+        return reloadedTask;
+      }
+      return updatedTask;
     } catch (error) {
-      // Log the error for debugging purposes
       console.error('Error saving updated task:', error);
-      // Provide a generic error message to the client
+      // Cek jika error karena foreign key categoryId tidak valid
+      if (error.code === '23503') {
+        // Kode error PostgreSQL untuk foreign key violation
+        throw new BadRequestException(
+          `Category with ID ${updateTaskDto.categoryId} does not exist.`,
+        );
+      }
       throw new BadRequestException('Could not update task.');
     }
   }
 
+  /**
+   * Menghapus task berdasarkan ID.
+   */
   async removeTask(id: number, userId: number): Promise<void> {
-    // Use findOne to verify ownership and existence first. It throws if not found/owned.
-    await this.findOne(id, userId);
-
-    const result = await this.taskRepository.delete({ id: id, userId: userId }); // Use primary key and userId for safety
-
+    await this.findOne(id, userId); // Verifikasi kepemilikan
+    const result = await this.taskRepository.delete({ id: id });
     if (result.affected === 0) {
-      // This case should ideally be caught by findOne, but acts as a safeguard
       throw new NotFoundException(`Task with ID ${id} could not be deleted.`);
     }
-    // No return value needed for successful deletion
   }
 
+  /**
+   * Mendapatkan ringkasan jumlah task.
+   */
   async getSummary(
     userId: number,
   ): Promise<{ completed: number; pending: number; nearDeadline: number }> {
     const now = new Date();
-    // Calculate 7 days from now accurately
     const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
-    // Use TypeORM query methods for counting
-    const completed = await this.taskRepository.count({
-      where: { userId: userId, status: TaskStatus.Done },
+    const completed = await this.taskRepository.countBy({
+      userId: userId,
+      status: TaskStatus.Done,
     });
-
     const pending = await this.taskRepository.count({
-      where: { userId: userId, status: Not(TaskStatus.Done) }, // Count tasks that are not 'Done'
+      where: { userId: userId, status: Not(TaskStatus.Done) },
     });
-
     const nearDeadline = await this.taskRepository.count({
       where: {
         userId: userId,
-        status: Not(TaskStatus.Done), // Only pending tasks
-        deadline: Between(now, sevenDaysFromNow), // Deadline is within the next 7 days (inclusive of start, exclusive of end by default)
+        status: Not(TaskStatus.Done),
+        deadline: Between(now, sevenDaysFromNow),
       },
     });
 
